@@ -21,6 +21,10 @@ app.use(authRouter);
 app.use(productRouter);
 app.use(cartRouter);
 
+app.get("/", (req, res) => {
+    res.json({ message: "Backend is running" });
+});
+
 app.get("/Home", (req, res) => {
     res.json({ MESSAGE: "WELCOME TO HOME PAGE" });
 });
