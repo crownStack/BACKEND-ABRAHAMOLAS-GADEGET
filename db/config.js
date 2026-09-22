@@ -1,9 +1,21 @@
-const dns = require('dns');
-const mongoose = require('mongoose');
+const dns = require("dns");
+const mongoose = require("mongoose");
+
 dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
-if (!process.env.MONGODB_URI) {
-	throw new Error('MONGODB_URI is not configured');
-}
+const connectDB = async () => {
+    try {
+        if (!process.env.MONGODB_URI) {
+            throw new Error("MONGODB_URI is not configured");
+        }
 
-mongoose.connect(process.env.MONGODB_URI)
+        await mongoose.connect(process.env.MONGODB_URI);
+
+        console.log("MongoDB connected successfully");
+    } catch (error) {
+        console.error("MongoDB connection failed:");
+        console.error(error.message);
+    }
+};
+
+connectDB();
