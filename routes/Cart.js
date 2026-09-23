@@ -33,7 +33,8 @@ router.post("/cart/products", async (req, res) => {
             cart = await Cart.findOne({ userEmail: normalizedEmail });
         }
 
-        if (!cart && !userId && !normalizedEmail && cartId) {
+        // Reuse a guest cart when the user signs in after adding items.
+        if (!cart && cartId) {
             cart = await Cart.findById(cartId);
         }
 
