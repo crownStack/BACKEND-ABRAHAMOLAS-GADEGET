@@ -14,11 +14,9 @@
   "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
-    "crypto": "^1.0.1",
     "dotenv": "^16.6.1",
     "express": "^5.2.1",
-    "mongodb": "^7.6.0",
-    "mongoose": "^9.9.5",
+    "mongoose": "^8.24.4",
     "multer": "^2.4.0"
   },
   "devDependencies": {
