@@ -342,7 +342,8 @@ router.post('/RequestPasswordReset', async (req, res) => {
 
 router.post('/ResetPassword', async (req, res) => {
     const { email, code, newPassword } = req.body;
-    const reset = passwordResetCodes.get(email);
+    const normalizedEmail = normalizeEmail(email);
+    const reset = passwordResetCodes.get(normalizedEmail);
 
     if (!email || !code || !newPassword) {
         return res.status(400).json({ message: 'All reset fields are required' });
@@ -355,12 +356,12 @@ router.post('/ResetPassword', async (req, res) => {
     }
 
     try {
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ email: normalizedEmail });
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         user.password = newPassword;
         await user.save();
-        passwordResetCodes.delete(email);
+        passwordResetCodes.delete(normalizedEmail);
 
         return res.json({ success: true, message: 'Password reset successfully' });
     } catch (error) {
