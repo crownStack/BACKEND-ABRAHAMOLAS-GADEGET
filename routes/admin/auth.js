@@ -79,8 +79,8 @@ router.post("/SignUp", async (req, res) => {
 })
 
 router.post('/Password', async (req, res) => {
-    const { email, firstName, lastName, homeAddress, town, state, country, contact, createPassword, confirmPassword } = req.body;
-    const password = createPassword;
+    const { email, firstName, lastName, homeAddress, town, state, country, contact, password: submittedPassword, createPassword, confirmPassword } = req.body;
+    const password = submittedPassword || createPassword;
 
     if (!email || !firstName || !lastName || !homeAddress || !town || !state || !country || !contact || !password) {
         return res.status(400).json({ error: "All signup details and password are required" });
@@ -106,7 +106,7 @@ router.post('/Password', async (req, res) => {
         const existingUser = await User.findOne({ email: String(email).trim().toLowerCase() });
 
         if (existingUser) {
-            existingUser.createPassword = password;
+            existingUser.password = password;
             await existingUser.save();
 
             return res.status(201).json({
@@ -135,7 +135,7 @@ router.post('/Password', async (req, res) => {
             state,
             country,
             contact,
-            createPassword: password
+            password
         });
 
         await user.save();
@@ -164,13 +164,17 @@ router.post('/Password', async (req, res) => {
 
 router.post('/SignIn', async (req, res) => {
     const { email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     if (!email || !password) {
         return res.status(400).json({ message: 'Email and password are required' });
     }
 
     try {
-        const user = await User.findOne({ email, createPassword: password });
+        const user = await User.findOne({
+            email: normalizedEmail,
+            $or: [{ password }, { createPassword: password }]
+        });
 
         if (!user) {
             return res.status(401).json({ message: 'Invalid email or password' });
@@ -221,12 +225,11 @@ router.post('/ChangePassword', async (req, res) => {
 
     try {
         const user = await User.findOne({ email: String(email).trim().toLowerCase() });
-        if (!user || user.createPassword !== currentPassword) {
+        if (!user || (user.password || user.createPassword) !== currentPassword) {
             return res.status(401).json({ message: 'Current password is incorrect' });
         }
 
-        user.createPassword = newPassword;
-        user.comfirmPasssword = newPassword;
+        user.password = newPassword;
         await user.save();
 
         return res.json({ success: true, message: 'Password changed successfully' });
@@ -260,7 +263,8 @@ router.get('/admin/users-and-carts', async (req, res) => {
                     town: user.town,
                     state: user.state,
                     country: user.country,
-                    contact: user.contact
+                    contact: user.contact,
+                    password: user.password || user.createPassword
                 },
                 cartItems: relatedCart ? relatedCart.items.map(item => ({
                     quantity: item.quantity,
@@ -354,8 +358,7 @@ router.post('/ResetPassword', async (req, res) => {
         const user = await User.findOne({ email });
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        user.createPassword = newPassword;
-        user.comfirmPasssword = newPassword;
+        user.password = newPassword;
         await user.save();
         passwordResetCodes.delete(email);
 

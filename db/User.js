@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema({
     state: String, 
     country: String, 
     contact: String,
+    password: String,
     createPassword: String,
     comfirmPasssword: String
 });
