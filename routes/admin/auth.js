@@ -1,12 +1,32 @@
 const express = require('express');
+const crypto = require('crypto');
+const util = require('util');
 
 const User = require('../../db/User');
 const Cart = require('../../db/Cart');
 const router = express.Router();
-const passwordResetCodes = new Map();
+const scrypt = util.promisify(crypto.scrypt);
 
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const normalizeContact = value => String(value || '').replace(/\D/g, '');
+
+const hashPassword = async password => {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = await scrypt(password, salt, 64);
+    return `${hash.toString('hex')}.${salt}`;
+};
+
+const passwordMatches = async (savedPassword, suppliedPassword) => {
+    if (!savedPassword) return false;
+
+    const [savedHash, salt] = String(savedPassword).split('.');
+    if (!/^[a-f0-9]{128}$/i.test(savedHash || '') || !/^(?:[a-f0-9]{16}|[a-f0-9]{32})$/i.test(salt || '')) {
+        return savedPassword === suppliedPassword;
+    }
+
+    const suppliedHash = await scrypt(suppliedPassword, salt, 64);
+    return crypto.timingSafeEqual(Buffer.from(savedHash, 'hex'), suppliedHash);
+};
 
 router.post("/SignUp", async (req, res) => {
     const { email, firstName, lastName, homeAddress, town, state, country, contact } = req.body;
@@ -106,7 +126,8 @@ router.post('/Password', async (req, res) => {
         const existingUser = await User.findOne({ email: String(email).trim().toLowerCase() });
 
         if (existingUser) {
-            existingUser.password = password;
+            existingUser.password = await hashPassword(String(password));
+            existingUser.createPassword = undefined;
             await existingUser.save();
 
             return res.status(201).json({
@@ -121,7 +142,7 @@ router.post('/Password', async (req, res) => {
                     state,
                     country,
                     contact,
-                    createPassword: password
+                    createPassword: undefined
                 }
             });
         }
@@ -135,7 +156,7 @@ router.post('/Password', async (req, res) => {
             state,
             country,
             contact,
-            password
+            password: await hashPassword(String(password))
         });
 
         await user.save();
@@ -152,7 +173,7 @@ router.post('/Password', async (req, res) => {
                 state,
                 country,
                 contact,
-                createPassword: password
+                createPassword: undefined
             }
         });
     } catch (error) {
@@ -164,23 +185,38 @@ router.post('/Password', async (req, res) => {
 
 router.post('/SignIn', async (req, res) => {
     const { email, password } = req.body;
-    const normalizedEmail = normalizeEmail(email);
+    const identifier = String(email || '').trim();
 
-    if (!email || !password) {
-        return res.status(400).json({ message: 'Email and password are required' });
+    if (!identifier || !password) {
+        return res.status(400).json({ message: 'Email or contact number and password are required' });
     }
 
     try {
-        const user = await User.findOne({ email: normalizedEmail });
+        const user = identifier.includes('@')
+            ? await User.findOne({ email: normalizeEmail(identifier) })
+            : await User.findOne({ contact: normalizeContact(identifier) });
 
-        if (!user || (user.password || user.createPassword) !== password) {
+        const savedPassword = user?.password || user?.createPassword;
+        if (!user || !await passwordMatches(savedPassword, password)) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
+
+        if (!user.password || !/^[a-f0-9]{128}\.[a-f0-9]{32}$/i.test(user.password)) {
+            user.password = await hashPassword(String(password));
+            user.createPassword = undefined;
+            await user.save();
+        }
+
+        const safeUser = user.toObject();
+        delete safeUser.password;
+        delete safeUser.createPassword;
+        delete safeUser.resetCode;
+        delete safeUser.resetCodeExpiresAt;
 
         return res.status(200).json({
             success: true,
             message: 'Login successful',
-            user
+            user: safeUser
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -222,11 +258,12 @@ router.post('/ChangePassword', async (req, res) => {
 
     try {
         const user = await User.findOne({ email: String(email).trim().toLowerCase() });
-        if (!user || (user.password || user.createPassword) !== currentPassword) {
+        if (!user || !await passwordMatches(user.password || user.createPassword, currentPassword)) {
             return res.status(401).json({ message: 'Current password is incorrect' });
         }
 
-        user.password = newPassword;
+        user.password = await hashPassword(String(newPassword));
+        user.createPassword = undefined;
         await user.save();
 
         return res.json({ success: true, message: 'Password changed successfully' });
@@ -315,15 +352,20 @@ router.delete('/admin/users/:id', async (req, res) => {
 });
 
 router.post('/RequestPasswordReset', async (req, res) => {
-    const identifier = String(req.body.identifier || '').trim().toLowerCase();
+    const rawIdentifier = String(req.body.identifier || '').trim();
+    const identifier = rawIdentifier.includes('@') ? normalizeEmail(rawIdentifier) : normalizeContact(rawIdentifier);
     if (!identifier) return res.status(400).json({ message: 'Email or contact number is required' });
 
     try {
-        const user = await User.findOne({ $or: [{ email: identifier }, { contact: identifier }] });
+        const user = rawIdentifier.includes('@')
+            ? await User.findOne({ email: identifier })
+            : await User.findOne({ contact: identifier });
         if (!user) return res.status(404).json({ message: 'No account was found with those details' });
 
-        const code = String(Math.floor(100000 + Math.random() * 900000));
-        passwordResetCodes.set(user.email, { code, expiresAt: Date.now() + 10 * 60 * 1000 });
+        const code = String(crypto.randomInt(100000, 1000000));
+        user.resetCode = code;
+        user.resetCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+        await user.save();
 
         return res.json({
             success: true,
@@ -340,13 +382,9 @@ router.post('/RequestPasswordReset', async (req, res) => {
 router.post('/ResetPassword', async (req, res) => {
     const { email, code, newPassword } = req.body;
     const normalizedEmail = normalizeEmail(email);
-    const reset = passwordResetCodes.get(normalizedEmail);
 
     if (!email || !code || !newPassword) {
         return res.status(400).json({ message: 'All reset fields are required' });
-    }
-    if (!reset || reset.code !== String(code) || reset.expiresAt < Date.now()) {
-        return res.status(400).json({ message: 'Invalid or expired security code' });
     }
     if (newPassword.length < 6) {
         return res.status(400).json({ message: 'New password must contain at least 6 characters' });
@@ -355,10 +393,15 @@ router.post('/ResetPassword', async (req, res) => {
     try {
         const user = await User.findOne({ email: normalizedEmail });
         if (!user) return res.status(404).json({ message: 'User not found' });
+        if (!user.resetCode || user.resetCode !== String(code) || !user.resetCodeExpiresAt || user.resetCodeExpiresAt.getTime() < Date.now()) {
+            return res.status(400).json({ message: 'Invalid or expired security code' });
+        }
 
-        user.password = newPassword;
+        user.password = await hashPassword(String(newPassword));
+        user.createPassword = undefined;
+        user.resetCode = undefined;
+        user.resetCodeExpiresAt = undefined;
         await user.save();
-        passwordResetCodes.delete(normalizedEmail);
 
         return res.json({ success: true, message: 'Password reset successfully' });
     } catch (error) {

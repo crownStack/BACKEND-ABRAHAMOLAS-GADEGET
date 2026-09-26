@@ -11,7 +11,9 @@ const userSchema = new mongoose.Schema({
     contact: String,
     password: String,
     createPassword: String,
-    comfirmPasssword: String
+    comfirmPasssword: String,
+    resetCode: String,
+    resetCodeExpiresAt: Date
 });
 
 module.exports = mongoose.model('User', userSchema);
