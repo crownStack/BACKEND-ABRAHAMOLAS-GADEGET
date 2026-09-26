@@ -10,22 +10,17 @@ const scrypt = util.promisify(crypto.scrypt);
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const normalizeContact = value => String(value || '').replace(/\D/g, '');
 
-const hashPassword = async password => {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = await scrypt(password, salt, 64);
-    return `${hash.toString('hex')}.${salt}`;
-};
+const passwordMatches = async (storedPassword, suppliedPassword) => {
+    if (!storedPassword) return false;
 
-const passwordMatches = async (savedPassword, suppliedPassword) => {
-    if (!savedPassword) return false;
+    const [storedHash, salt] = String(storedPassword).split('.');
+    const isScryptHash = /^[a-f0-9]{128}$/i.test(storedHash || '')
+        && /^(?:[a-f0-9]{16}|[a-f0-9]{32})$/i.test(salt || '');
 
-    const [savedHash, salt] = String(savedPassword).split('.');
-    if (!/^[a-f0-9]{128}$/i.test(savedHash || '') || !/^(?:[a-f0-9]{16}|[a-f0-9]{32})$/i.test(salt || '')) {
-        return savedPassword === suppliedPassword;
-    }
+    if (!isScryptHash) return storedPassword === suppliedPassword;
 
     const suppliedHash = await scrypt(suppliedPassword, salt, 64);
-    return crypto.timingSafeEqual(Buffer.from(savedHash, 'hex'), suppliedHash);
+    return crypto.timingSafeEqual(Buffer.from(storedHash, 'hex'), suppliedHash);
 };
 
 router.post("/SignUp", async (req, res) => {
@@ -126,8 +121,7 @@ router.post('/Password', async (req, res) => {
         const existingUser = await User.findOne({ email: String(email).trim().toLowerCase() });
 
         if (existingUser) {
-            existingUser.password = await hashPassword(String(password));
-            existingUser.createPassword = undefined;
+            existingUser.password = password;
             await existingUser.save();
 
             return res.status(201).json({
@@ -142,7 +136,7 @@ router.post('/Password', async (req, res) => {
                     state,
                     country,
                     contact,
-                    createPassword: undefined
+                    createPassword: password
                 }
             });
         }
@@ -156,7 +150,7 @@ router.post('/Password', async (req, res) => {
             state,
             country,
             contact,
-            password: await hashPassword(String(password))
+            password
         });
 
         await user.save();
@@ -173,7 +167,7 @@ router.post('/Password', async (req, res) => {
                 state,
                 country,
                 contact,
-                createPassword: undefined
+                createPassword: password
             }
         });
     } catch (error) {
@@ -196,27 +190,14 @@ router.post('/SignIn', async (req, res) => {
             ? await User.findOne({ email: normalizeEmail(identifier) })
             : await User.findOne({ contact: normalizeContact(identifier) });
 
-        const savedPassword = user?.password || user?.createPassword;
-        if (!user || !await passwordMatches(savedPassword, password)) {
+        if (!user || !await passwordMatches(user.password || user.createPassword, password)) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
-
-        if (!user.password || !/^[a-f0-9]{128}\.[a-f0-9]{32}$/i.test(user.password)) {
-            user.password = await hashPassword(String(password));
-            user.createPassword = undefined;
-            await user.save();
-        }
-
-        const safeUser = user.toObject();
-        delete safeUser.password;
-        delete safeUser.createPassword;
-        delete safeUser.resetCode;
-        delete safeUser.resetCodeExpiresAt;
 
         return res.status(200).json({
             success: true,
             message: 'Login successful',
-            user: safeUser
+            user
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -262,8 +243,7 @@ router.post('/ChangePassword', async (req, res) => {
             return res.status(401).json({ message: 'Current password is incorrect' });
         }
 
-        user.password = await hashPassword(String(newPassword));
-        user.createPassword = undefined;
+        user.password = newPassword;
         await user.save();
 
         return res.json({ success: true, message: 'Password changed successfully' });
@@ -397,8 +377,7 @@ router.post('/ResetPassword', async (req, res) => {
             return res.status(400).json({ message: 'Invalid or expired security code' });
         }
 
-        user.password = await hashPassword(String(newPassword));
-        user.createPassword = undefined;
+        user.password = newPassword;
         user.resetCode = undefined;
         user.resetCodeExpiresAt = undefined;
         await user.save();
