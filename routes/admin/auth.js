@@ -25,7 +25,7 @@ const passwordMatches = async (storedPassword, suppliedPassword) => {
 
 router.post("/SignUp", async (req, res) => {
     const { email, firstName, lastName, homeAddress, town, state, country, contact } = req.body;
-
+ 
     if (!email || !firstName || !lastName || !homeAddress || !town || !state || !country || !contact) {
         return res.status(400).json({ error: "All fields are required" });
     }
